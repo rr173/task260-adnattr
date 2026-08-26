@@ -74,6 +74,9 @@ func pathID(r *http.Request) (int64, error) {
 }
 
 // decodeJSON 带大小限制（1 MiB）与未知字段拒绝地解码请求体。
+// 请求体必须恰好包含一个合法 JSON 对象；首个对象之后若仍有任何内容
+// （包括第二个 JSON 对象或非 JSON 垃圾），一律视为参数错误，避免只
+// 解析第一个对象便误返回成功、产生半截业务写入。
 func decodeJSON(r *http.Request, v interface{}) error {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -86,6 +89,13 @@ func decodeJSON(r *http.Request, v interface{}) error {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		return err
+	}
+	// 首个对象解码成功后，请求体必须已耗尽（仅允许尾随空白）。
+	// 若仍能解码出第二个值，或剩余内容不是合法 JSON，Decode 会返回
+	// 非 io.EOF 错误，此时整体视为参数错误。
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		return errors.New("httpapi: request body must contain exactly one JSON object")
 	}
 	return nil
 }
