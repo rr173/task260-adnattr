@@ -3,6 +3,8 @@ package httpapi
 import (
 	"net/http"
 	"strconv"
+
+	"task260-adnattr/internal/service"
 )
 
 // handleIngestFragment POST /api/fragments
@@ -51,22 +53,20 @@ func (s *Server) handleBatchIngestFragments(w http.ResponseWriter, r *http.Reque
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	added, ignored := 0, 0
-	var firstErr error
-	for _, it := range req.Items {
-		_, ok, err := s.svc.IngestFragment(req.LibraryID, it.FragLen, it.C2T5p, it.G2A3p, it.MeanBaseError, it.Sequence)
-		if err != nil {
-			firstErr = err
-			break
-		}
-		if ok {
-			added++
-		} else {
-			ignored++
+	// 原子导入：先校验整批每一项，任一非法即整体回滚，不留本批次写入。
+	inputs := make([]service.FragmentInput, len(req.Items))
+	for i, it := range req.Items {
+		inputs[i] = service.FragmentInput{
+			FragLen:       it.FragLen,
+			C2T5p:         it.C2T5p,
+			G2A3p:         it.G2A3p,
+			MeanBaseError: it.MeanBaseError,
+			Sequence:      it.Sequence,
 		}
 	}
-	if firstErr != nil {
-		st, msg := statusFromErr(firstErr)
+	added, ignored, err := s.svc.IngestFragmentsAtomic(req.LibraryID, inputs)
+	if err != nil {
+		st, msg := statusFromErr(err)
 		writeErr(w, st, msg)
 		return
 	}
