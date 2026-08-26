@@ -87,6 +87,61 @@ func TestAnalyzeAuthenticDegradation(t *testing.T) {
 	}
 }
 
+func TestAnalyzePrefersLinkedBlankOverGlobalPool(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+
+	lib, err := svc.CreateLibrary("L", "")
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	// 全局空白池：与研究者的预期参照截然不同（差异巨大），若被选用会改变归因分。
+	globalBlank, err := svc.CreateControl("global-blank", true, 60, 0.30, 0.30, 0)
+	if err != nil {
+		t.Fatalf("create global blank: %v", err)
+	}
+	// 研究者为本文库明确选定的参照：长片段、脱氨低，与该文库片段一致 → 现代污染。
+	linkedBlank, err := svc.CreateControl("linked-blank", true, 160, 0.01, 0.01, 0)
+	if err != nil {
+		t.Fatalf("create linked blank: %v", err)
+	}
+	if err := svc.AssociateControl(lib.ID, linkedBlank.ID); err != nil {
+		t.Fatalf("associate linked blank: %v", err)
+	}
+	// 现代污染风格片段：长、脱氨弱，与 linked-blank 高度相似。
+	frags := []struct {
+		len int
+		c2t float64
+		g2a float64
+	}{{160, 0.02, 0.01}, {180, 0.015, 0.012}, {200, 0.01, 0.008}}
+	for _, f := range frags {
+		if _, _, err := svc.IngestFragment(lib.ID, f.len, f.c2t, f.g2a, 0.005, ""); err != nil {
+			t.Fatalf("ingest: %v", err)
+		}
+	}
+	if _, err := svc.Cluster(lib.ID); err != nil {
+		t.Fatalf("cluster: %v", err)
+	}
+	_, cand, err := svc.Analyze(lib.ID)
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	// 若分析误用全局空白（差异大的 globalBlank），相似度会很低、阈值不达 modern_contamination。
+	// 只有在使用研究者选定的 linkedBlank 时，才会被判为现代污染。
+	if cand.Kind != model.AttribModernContamination {
+		t.Fatalf("kind = %s, want %s (analysis must use the researcher-linked blank, not the global pool)",
+			cand.Kind, model.AttribModernContamination)
+	}
+	// 全局空白仍存在于系统中，证明筛选生效而非依赖空池。
+	blanks, err := svc.Store.ListBlankControls()
+	if err != nil {
+		t.Fatalf("list blanks: %v", err)
+	}
+	if len(blanks) < 2 || blanks[0].ID != globalBlank.ID {
+		t.Fatalf("global pool should still contain both blanks, got %#v", blanks)
+	}
+}
+
 func TestIngestIdempotentByFingerprint(t *testing.T) {
 	svc, cleanup := newTestService(t)
 	defer cleanup()

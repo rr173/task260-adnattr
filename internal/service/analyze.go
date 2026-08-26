@@ -12,7 +12,8 @@ import (
 
 // Analyze 执行文库分析流水线：
 //  1. 计算末端脱氨损伤轮廓；
-//  2. 选取空白对照（优先差异最大者作为参考）；
+//  2. 选取空白对照：优先研究者已为本文库明确关联的空白对照，未关联时回退到全局空白池，
+//     再从中挑选与文库差异最大者作为参考；
 //  3. 评分污染归因（降解 / 现代污染 / 证据不足）；
 //  4. 刷新未确认候选并写入新候选。
 func (svc *Service) Analyze(libID int64) (*model.DamageProfile, *model.AttributionCandidate, error) {
@@ -27,16 +28,18 @@ func (svc *Service) Analyze(libID int64) (*model.DamageProfile, *model.Attributi
 	if err != nil {
 		return nil, nil, err
 	}
-	blanks, err := svc.Store.ListBlankControls()
+	// 优先使用研究者为本文库明确关联的空白对照；未关联时才回退到全局空白池。
+	// 这保证污染归因以研究者选定的参照为准，而非其他批次的全局空白对照。
+	candidates, err := svc.Store.ListAnalysisControls(libID)
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(blanks) == 0 {
+	if len(candidates) == 0 {
 		return nil, nil, fmt.Errorf("%w: no blank control available for attribution", model.ErrControlMissing)
 	}
-	ref := control.PickReference(blanks, prof)
+	ref := control.PickReference(candidates, prof)
 	if ref == nil {
-		ref = blanks[0]
+		ref = candidates[0]
 	}
 	kind, score, reason, err := attribution.Score(prof, ref)
 	if err != nil {
