@@ -121,6 +121,10 @@ func (s *Store) ValidateSnapshotControl(controlID int64) error {
 }
 
 // AssociateControl 将某对照关联到文库（锁定参考对照）。重复关联幂等。
+//
+// 参考对照关系不得形成自引用或跨文库循环：若被关联对照恰好由当前文库产生
+// （自引用），或其来源文库已（直接或间接）依赖当前文库（跨文库循环），
+// 则拒绝本次关联——即拒绝那一次会闭合循环的关联。
 func (s *Store) AssociateControl(libID, controlID int64) error {
 	lb, err := s.GetLibrary(libID)
 	if err != nil {
@@ -129,9 +133,18 @@ func (s *Store) AssociateControl(libID, controlID int64) error {
 	if lb.Status == model.LibSealed {
 		return model.ErrSealed
 	}
-	_, err = s.GetControl(controlID)
+	c, err := s.GetControl(controlID)
 	if err != nil {
 		return err
+	}
+	// 自引用：对照来自当前文库本身。
+	if err := model.ValidateControlLink(libID, c.LibraryID); err != nil {
+		return err
+	}
+	// 跨文库循环：该对照的来源文库已依赖当前文库时，再关联即闭合循环。
+	// 空白对照无来源文库（LibraryID==0），不可能构成循环，跳过。
+	if c.LibraryID > 0 && s.libraryDependsOn(c.LibraryID, libID, make(map[int64]bool)) {
+		return model.ErrBatchCycle
 	}
 	if _, err := s.db.Exec(
 		`INSERT OR IGNORE INTO library_control_links(library_id, control_id) VALUES(?,?)`, libID, controlID); err != nil {
@@ -140,6 +153,10 @@ func (s *Store) AssociateControl(libID, controlID int64) error {
 	return nil
 }
 
+// libraryDependsOn 判断对照来源依赖链上 start 是否（直接或间接）到达 target：
+// 自 start 出发，沿"该文库关联的参考对照 → 对照的来源文库"逐层展开，
+// 一旦命中 target 即返回 true。seen 防止对已访问文库重复展开。
+// 用于检测关联后是否会闭合跨文库循环。
 func (s *Store) libraryDependsOn(start, target int64, seen map[int64]bool) bool {
 	if start == target {
 		return true
