@@ -96,7 +96,14 @@ func (svc *Service) ExcludeBatch(libID int64) (*model.LibraryBatch, error) {
 }
 
 // PublishSnapshot 组装可信度快照摘要、创建并发布（冻结对照批次），返回已发布快照。
+// 仅当参照为真实存在的空白对照时才允许冻结进快照，拒绝不存在的对照编号，以免
+// 快照引用无法追溯的对照批次。
 func (svc *Service) PublishSnapshot(libID, controlID int64) (*model.ConfidenceSnapshot, error) {
+	// 在创建快照草稿前先校验参照：不存在则 ErrUnknownControl，非空白则 ErrControlMissing，
+	// 避免写入引用了不实对照批次的已发布快照。
+	if err := svc.Store.ValidateSnapshotControl(controlID); err != nil {
+		return nil, err
+	}
 	payload, err := snapshot.BuildPayload(svc.Store, libID)
 	if err != nil {
 		return nil, err
