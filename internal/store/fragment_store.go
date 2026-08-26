@@ -229,10 +229,17 @@ func (s *Store) ListClustersByLibrary(libID int64) ([]*model.FragmentCluster, er
 	return out, rows.Err()
 }
 
-// UpdateClusterStatus 更新片段簇状态（校验流转）。
+// UpdateClusterStatus 更新片段簇状态（校验流转）。封存文库下的簇保持只读，拒绝任何状态修改。
 func (s *Store) UpdateClusterStatus(id int64, to string) (*model.FragmentCluster, error) {
 	c, err := s.GetCluster(id)
 	if err != nil {
+		return nil, err
+	}
+	lb, err := s.GetLibrary(c.LibraryID)
+	if err != nil {
+		return nil, err
+	}
+	if err := model.ValidateLibraryMutable(lb.Status); err != nil {
 		return nil, err
 	}
 	if err := model.ValidateFragmentTransition(c.Status, to); err != nil {
