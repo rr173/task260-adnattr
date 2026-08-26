@@ -15,7 +15,17 @@ import (
 //  2. 选取空白对照（优先差异最大者作为参考）；
 //  3. 评分污染归因（降解 / 现代污染 / 证据不足）；
 //  4. 刷新未确认候选并写入新候选。
+//
+// 封存（sealed）的文库数据不可变：封存后再次发起分析请求必须被拒绝，
+// 不得新增或覆盖任何损伤轮廓与归因记录。
 func (svc *Service) Analyze(libID int64) (*model.DamageProfile, *model.AttributionCandidate, error) {
+	sealed, err := svc.Store.IsLibrarySealed(libID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if sealed {
+		return nil, nil, model.ErrSealed
+	}
 	prof, err := damage.ComputeProfile(svc.Store, libID)
 	if err != nil {
 		return nil, nil, err

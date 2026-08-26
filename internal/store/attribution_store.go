@@ -8,9 +8,13 @@ import (
 )
 
 // InsertAttribution 写入一条归因候选。
+// 封存的文库数据不可变：封存后禁止新增归因记录。
 func (s *Store) InsertAttribution(libID int64, kind, status string, score float64, reason string) (*model.AttributionCandidate, error) {
-	_, err := s.GetLibrary(libID)
+	lb, err := s.GetLibrary(libID)
 	if err != nil {
+		return nil, err
+	}
+	if err := model.ValidateLibraryMutable(lb.Status); err != nil {
 		return nil, err
 	}
 	res, err := s.db.Exec(
@@ -75,7 +79,15 @@ func (s *Store) ConfirmAttribution(id int64, to string) (*model.AttributionCandi
 }
 
 // DeleteOpenAttributions 删除某文库未确认的归因候选（刷新重算前清理）。
+// 封存的文库数据不可变：封存后禁止删除归因记录。
 func (s *Store) DeleteOpenAttributions(libID int64) (int64, error) {
+	lb, err := s.GetLibrary(libID)
+	if err != nil {
+		return 0, err
+	}
+	if err := model.ValidateLibraryMutable(lb.Status); err != nil {
+		return 0, err
+	}
 	res, err := s.db.Exec(
 		`DELETE FROM attribution_candidates WHERE library_id = ? AND status != ?`, libID, model.AttribConfirmed)
 	if err != nil {

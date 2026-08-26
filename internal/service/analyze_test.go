@@ -150,3 +150,65 @@ func TestSealedLibraryRejectsMutation(t *testing.T) {
 		t.Fatalf("expected ErrSealed, got %v", err)
 	}
 }
+
+// TestSealedLibraryRejectsAnalysis 锁定封存不可变：封存后再次发起分析请求必须被拒绝，
+// 且不得新增或覆盖损伤轮廓与归因记录（封存数据保持不变）。
+func TestSealedLibraryRejectsAnalysis(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+
+	if _, err := svc.CreateControl("blank", true, 150, 0.01, 0.01, 0); err != nil {
+		t.Fatalf("create blank: %v", err)
+	}
+	lib, err := svc.CreateLibrary("sealed", "")
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	if _, _, err := svc.IngestFragment(lib.ID, 60, 0.2, 0.1, 0.004, ""); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	if _, err := svc.Cluster(lib.ID); err != nil {
+		t.Fatalf("cluster: %v", err)
+	}
+	prof, cand, err := svc.Analyze(lib.ID)
+	if err != nil {
+		t.Fatalf("first analyze: %v", err)
+	}
+	// 推进到 published 后封存。
+	if _, err := svc.AdvanceLibrary(lib.ID, model.LibPendingAnalysis); err != nil {
+		t.Fatalf("advance to pending_analysis: %v", err)
+	}
+	if _, err := svc.AdvanceLibrary(lib.ID, model.LibNeedsReview); err != nil {
+		t.Fatalf("advance to needs_review: %v", err)
+	}
+	if _, err := svc.AdvanceLibrary(lib.ID, model.LibPublished); err != nil {
+		t.Fatalf("advance to published: %v", err)
+	}
+	if _, err := svc.SealLibrary(lib.ID); err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+
+	// 封存后再次分析必须被拒绝。
+	if _, _, err := svc.Analyze(lib.ID); !errors.Is(err, model.ErrSealed) {
+		t.Fatalf("analyze sealed library: got %v, want ErrSealed", err)
+	}
+
+	// 损伤轮廓未被覆盖。
+	profAfter, err := svc.Store.GetDamageProfile(lib.ID)
+	if err != nil {
+		t.Fatalf("get damage after: %v", err)
+	}
+	if profAfter.ComputedAt != prof.ComputedAt || profAfter.Deam5p != prof.Deam5p {
+		t.Fatalf("sealed damage profile mutated: computed_at %d->%d deam5p %v->%v",
+			prof.ComputedAt, profAfter.ComputedAt, prof.Deam5p, profAfter.Deam5p)
+	}
+	// 归因记录未被删除或新增。
+	attrs, err := svc.Store.ListAttributionsByLibrary(lib.ID)
+	if err != nil {
+		t.Fatalf("list attributions: %v", err)
+	}
+	if len(attrs) != 1 || attrs[0].ID != cand.ID {
+		t.Fatalf("sealed attributions mutated: count=%d, want 1 (id=%d)", len(attrs), cand.ID)
+	}
+}
+

@@ -7,9 +7,13 @@ import (
 )
 
 // UpsertDamageProfile 写入（或更新）某文库的末端脱氨损伤轮廓。
+// 封存的文库数据不可变：封存后禁止新增或覆盖轮廓。
 func (s *Store) UpsertDamageProfile(libID int64, deam5p, deam3p, meanLen float64, n int) (*model.DamageProfile, error) {
-	_, err := s.GetLibrary(libID)
+	lb, err := s.GetLibrary(libID)
 	if err != nil {
+		return nil, err
+	}
+	if err := model.ValidateLibraryMutable(lb.Status); err != nil {
 		return nil, err
 	}
 	if _, err := s.db.Exec(
