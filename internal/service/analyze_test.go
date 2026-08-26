@@ -87,6 +87,52 @@ func TestAnalyzeAuthenticDegradation(t *testing.T) {
 	}
 }
 
+// TestAnalyzeSingleEndDeamIsNotDegradation 覆盖回归：仅 5' 端 C→T 富集、3' 端 G→A 缺失，
+// 即便片段偏短，也不得归为真实降解——两端损伤轮廓与短片段须共同满足。
+func TestAnalyzeSingleEndDeamIsNotDegradation(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+
+	if _, err := svc.CreateControl("blank", true, 150, 0.01, 0.01, 0); err != nil {
+		t.Fatalf("create blank: %v", err)
+	}
+	lib, err := svc.CreateLibrary("C", "single-end deam only")
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	// 短片段 + 5' 端 C→T 高，但 3' 端 G→A 接近空白水平。
+	frags := []struct {
+		len int
+		c2t float64
+		g2a float64
+	}{{50, 0.22, 0.01}, {65, 0.19, 0.012}, {75, 0.24, 0.008}}
+	for _, f := range frags {
+		if _, _, err := svc.IngestFragment(lib.ID, f.len, f.c2t, f.g2a, 0.004, ""); err != nil {
+			t.Fatalf("ingest: %v", err)
+		}
+	}
+	if _, err := svc.Cluster(lib.ID); err != nil {
+		t.Fatalf("cluster: %v", err)
+	}
+	_, cand, err := svc.Analyze(lib.ID)
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if cand.Kind == model.AttribDegradation {
+		t.Fatalf("single-end deam must not be degradation, got %s (reason=%s)", cand.Kind, cand.Reason)
+	}
+	// 片段簇亦不应被自动归为 damage_consistent。
+	clusters, err := svc.Store.ListClustersByLibrary(lib.ID)
+	if err != nil {
+		t.Fatalf("list clusters: %v", err)
+	}
+	for _, c := range clusters {
+		if c.Status == model.FragDamageConsistent {
+			t.Fatalf("cluster %d status = %s, want not damage_consistent (single-end deam)", c.ID, c.Status)
+		}
+	}
+}
+
 func TestIngestIdempotentByFingerprint(t *testing.T) {
 	svc, cleanup := newTestService(t)
 	defer cleanup()

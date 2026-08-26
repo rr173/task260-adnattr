@@ -63,7 +63,7 @@ func (svc *Service) Analyze(libID int64) (*model.DamageProfile, *model.Attributi
 		if c.Status != model.FragRaw {
 			continue
 		}
-		to := attribution.Classify(c.MeanLen, c.MeanC2T5p)
+		to := attribution.Classify(c.MeanLen, c.MeanC2T5p, c.MeanG2A3p)
 		if _, err := svc.Store.UpdateClusterStatus(c.ID, to); err != nil {
 			return nil, nil, err
 		}
