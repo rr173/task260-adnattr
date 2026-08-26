@@ -159,7 +159,8 @@ func (s *Store) AggregateFragments(libID int64) (*FragStats, error) {
 	return st, nil
 }
 
-// InsertFragmentCluster 写入片段簇（初始 raw）。
+// InsertFragmentCluster 幂等写入片段簇（初始 raw）：若该 (文库, 指纹) 已存在则返回已有簇，
+// 不产生重复。重复执行聚类应复用已有结果而非新增簇。
 func (s *Store) InsertFragmentCluster(libID int64, fp string, meanLen, meanC2T5p, meanG2A3p float64, size int) (*model.FragmentCluster, error) {
 	lb, err := s.GetLibrary(libID)
 	if err != nil {
@@ -168,12 +169,22 @@ func (s *Store) InsertFragmentCluster(libID int64, fp string, meanLen, meanC2T5p
 	if lb.Status == model.LibSealed {
 		return nil, model.ErrSealed
 	}
+	// 先按 (文库, 指纹) 读取（幂等）。
+	if existing, err := s.GetClusterByFingerprint(libID, fp); err == nil {
+		return existing, nil
+	}
 	res, err := s.db.Exec(
-		`INSERT INTO fragment_clusters(library_id, fingerprint, status, mean_len, mean_c2t_5p, mean_g2a_3p, size, created_at)
+		`INSERT OR IGNORE INTO fragment_clusters(library_id, fingerprint, status, mean_len, mean_c2t_5p, mean_g2a_3p, size, created_at)
 		 VALUES(?,?,?,?,?,?,?,?)`,
 		libID, fp, model.FragRaw, meanLen, meanC2T5p, meanG2A3p, size, now())
 	if err != nil {
 		return nil, fmt.Errorf("store: insert cluster: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// 并发或既有重复：回退为读取已有簇。
+		if existing, err := s.GetClusterByFingerprint(libID, fp); err == nil {
+			return existing, nil
+		}
 	}
 	id, _ := res.LastInsertId()
 	return s.GetCluster(id)

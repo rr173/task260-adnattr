@@ -138,6 +138,13 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_cluster_lib ON fragment_clusters(library_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_attr_lib ON attribution_candidates(library_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_snap_lib ON confidence_snapshots(library_id);`,
+		// 片段簇按 (文库, 指纹) 幂等：先清理历史重复（保留最小 id），再加唯一索引，
+		// 使重复执行聚类不会产生重复簇。CREATE IF NOT EXISTS 使本步可重复执行。
+		`DELETE FROM fragment_clusters
+			WHERE id NOT IN (
+				SELECT MIN(id) FROM fragment_clusters GROUP BY library_id, fingerprint
+			);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_cluster_lib_fp ON fragment_clusters(library_id, fingerprint);`,
 	}
 	for _, stmt := range schema {
 		if _, err := s.db.Exec(stmt); err != nil {
